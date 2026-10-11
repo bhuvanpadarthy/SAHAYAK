@@ -67,4 +67,35 @@ class CryptoEngineTest {
         // Eavesdropper B attempts to decrypt with their own key -> throws
         CryptoEngine.decrypt(eavesdropperB.privateKey, encryptedBundleBase64)
     }
+
+    @Test
+    fun testAuthenticatedAssociatedDataBinding() {
+        val senderKeyPair = CryptoEngine.generateSigningKeyPair()
+        val recipientKeyPair = CryptoEngine.generateEncryptionKeyPair()
+        val originalBytes = "Coordinates: Zone 4".toByteArray(StandardCharsets.UTF_8)
+        val aad = senderKeyPair.publicKey + recipientKeyPair.publicKey
+
+        val encryptedBundle = CryptoEngine.encrypt(recipientKeyPair.publicKey, originalBytes, associatedData = aad)
+        val decrypted = CryptoEngine.decrypt(recipientKeyPair.privateKey, encryptedBundle, associatedData = aad)
+
+        assertArrayEquals(originalBytes, decrypted)
+    }
+
+    @Test(expected = Exception::class)
+    fun testMismatchedAssociatedDataFailsAuthentication() {
+        val senderA = CryptoEngine.generateSigningKeyPair()
+        val impostorB = CryptoEngine.generateSigningKeyPair()
+        val recipient = CryptoEngine.generateEncryptionKeyPair()
+        val originalBytes = "Coordinates: Zone 4".toByteArray(StandardCharsets.UTF_8)
+
+        // Encrypted with Sender A's identity in AAD
+        val realAad = senderA.publicKey + recipient.publicKey
+        val encryptedBundle = CryptoEngine.encrypt(recipient.publicKey, originalBytes, associatedData = realAad)
+
+        // Attacker claims message originated from Impostor B
+        val forgedAad = impostorB.publicKey + recipient.publicKey
+
+        // Must fail with GCM tag mismatch
+        CryptoEngine.decrypt(recipient.privateKey, encryptedBundle, associatedData = forgedAad)
+    }
 }

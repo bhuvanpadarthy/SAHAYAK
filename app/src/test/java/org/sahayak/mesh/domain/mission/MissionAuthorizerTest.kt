@@ -123,4 +123,66 @@ class MissionAuthorizerTest {
         assertTrue(authorizer.canAssignResponders(Role.STAFF))
         assertFalse(authorizer.canAssignResponders(Role.VISITOR))
     }
+
+    @Test
+    fun testExpiredMissionRejectsBroadcastEvenIfMarkedActive() {
+        val coordinatorKeyPair = CryptoEngine.generateSigningKeyPair()
+        val now = 100_000L
+        val mission = Mission(
+            missionId = "mission-expired",
+            title = "Expired Mission",
+            description = "Mission past deadline",
+            coordinatorId = "coord-01",
+            coordinatorPublicKeyHex = CryptoEngine.toHex(coordinatorKeyPair.publicKey),
+            createdAtMs = 10_000L,
+            expiresAtMs = 50_000L, // Expired at 50k, now is 100k
+            isActive = true
+        )
+
+        val envelope = PacketEnvelope(
+            packetId = "bcast-expired",
+            senderId = "coord-01",
+            recipientId = PacketEnvelope.BROADCAST_RECIPIENT,
+            missionId = "mission-expired",
+            payloadType = PayloadType.BROADCAST_ALERT,
+            createdAtMs = 20_000L,
+            expiresAtMs = 40_000L,
+            encryptedPayload = "{\"alert\":\"Too late\"}"
+        )
+        val signature = CryptoEngine.sign(coordinatorKeyPair.privateKey, envelope.canonicalHeaderBytes())
+        val envelopeSigned = envelope.copy(signature = Base64.getEncoder().encodeToString(signature))
+
+        assertFalse(authorizer.authorizeBroadcast(envelopeSigned, mission, currentTimeMs = now))
+    }
+
+    @Test
+    fun testNonBroadcastPayloadTypeIsRejectedByMissionAuthorizer() {
+        val coordinatorKeyPair = CryptoEngine.generateSigningKeyPair()
+        val mission = Mission(
+            missionId = "mission-alpha",
+            title = "Alpha",
+            description = "Active mission",
+            coordinatorId = "coord-01",
+            coordinatorPublicKeyHex = CryptoEngine.toHex(coordinatorKeyPair.publicKey),
+            createdAtMs = 1000L,
+            expiresAtMs = 100_000L,
+            isActive = true
+        )
+
+        // CHAT_DIRECT is not a BROADCAST_ALERT
+        val envelope = PacketEnvelope(
+            packetId = "chat-not-bcast",
+            senderId = "coord-01",
+            recipientId = PacketEnvelope.BROADCAST_RECIPIENT,
+            missionId = "mission-alpha",
+            payloadType = PayloadType.CHAT_DIRECT,
+            createdAtMs = 2000L,
+            expiresAtMs = 90_000L,
+            encryptedPayload = "Direct chat payload"
+        )
+        val signature = CryptoEngine.sign(coordinatorKeyPair.privateKey, envelope.canonicalHeaderBytes())
+        val envelopeSigned = envelope.copy(signature = Base64.getEncoder().encodeToString(signature))
+
+        assertFalse(authorizer.authorizeBroadcast(envelopeSigned, mission, currentTimeMs = 5000L))
+    }
 }

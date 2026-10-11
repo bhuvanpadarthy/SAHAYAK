@@ -34,6 +34,11 @@ class ProtocolValidator(
             return ValidationResult.Invalid("Payload size exceeds maximum allowed bound of ${PacketEnvelope.MAX_PACKET_BYTES} bytes")
         }
 
+        // Inverted lifetime check
+        if (envelope.expiresAtMs <= envelope.createdAtMs) {
+            return ValidationResult.Invalid("Packet expiresAtMs must be strictly greater than createdAtMs")
+        }
+
         // Expiry check
         if (envelope.expiresAtMs < currentTimeMs) {
             return ValidationResult.Invalid("Packet has expired: expiresAtMs=${envelope.expiresAtMs}, now=$currentTimeMs")
@@ -51,6 +56,10 @@ class ProtocolValidator(
 
         if (envelope.hopLimit <= 0) {
             return ValidationResult.Invalid("hopLimit must be strictly positive")
+        }
+
+        if (envelope.hopCount > envelope.hopLimit) {
+            return ValidationResult.Invalid("hopCount (${envelope.hopCount}) exceeds hopLimit (${envelope.hopLimit})")
         }
 
         return ValidationResult.Valid

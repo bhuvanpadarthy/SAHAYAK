@@ -12,14 +12,28 @@ class MissionAuthorizer {
      * Verifies that the sender is authorized to issue a broadcast for the specified mission
      * and that the packet contains a valid Ed25519 digital signature matching the coordinator key.
      */
-    fun authorizeBroadcast(envelope: PacketEnvelope, mission: Mission): Boolean {
+    fun authorizeBroadcast(
+        envelope: PacketEnvelope,
+        mission: Mission,
+        currentTimeMs: Long = System.currentTimeMillis()
+    ): Boolean {
         // Must match mission ID
         if (envelope.missionId != mission.missionId) {
             return false
         }
 
-        // Mission must be active
-        if (!mission.isActive) {
+        // Must be a broadcast alert payload
+        if (envelope.payloadType != org.sahayak.mesh.core.model.PayloadType.BROADCAST_ALERT) {
+            return false
+        }
+
+        // Mission must be active and not expired
+        if (!mission.isActive || mission.expiresAtMs <= currentTimeMs) {
+            return false
+        }
+
+        // Broadcast envelope itself must not have expired
+        if (envelope.expiresAtMs <= currentTimeMs) {
             return false
         }
 

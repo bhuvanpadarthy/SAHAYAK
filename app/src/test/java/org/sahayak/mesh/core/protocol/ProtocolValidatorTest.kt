@@ -102,4 +102,42 @@ class ProtocolValidatorTest {
         val exhaustedEnvelope = eligibleEnvelope.copy(hopCount = 5)
         assertFalse(validator.isEligibleForRelay(exhaustedEnvelope, now))
     }
+
+    @Test
+    fun testInvertedLifetimeIsRejected() {
+        val now = 1000L
+        val envelope = PacketEnvelope(
+            packetId = "test-pkt-inverted",
+            senderId = "sender-key-hex",
+            recipientId = "recip-key-hex",
+            payloadType = PayloadType.CHAT_DIRECT,
+            createdAtMs = 5000L,
+            expiresAtMs = 4000L, // Inverted: expires before creation!
+            encryptedPayload = "payload"
+        )
+
+        val result = validator.validate(envelope, now)
+        assertTrue(result is ValidationResult.Invalid)
+        assertTrue((result as ValidationResult.Invalid).reason.contains("expiresAtMs must be strictly greater than createdAtMs"))
+    }
+
+    @Test
+    fun testExcessiveHopCountIsRejected() {
+        val now = System.currentTimeMillis()
+        val envelope = PacketEnvelope(
+            packetId = "test-pkt-hops",
+            senderId = "sender-key-hex",
+            recipientId = "recip-key-hex",
+            payloadType = PayloadType.CHAT_DIRECT,
+            hopLimit = 5,
+            hopCount = 10, // 10 exceeds hopLimit 5
+            createdAtMs = now,
+            expiresAtMs = now + 3600_000L,
+            encryptedPayload = "payload"
+        )
+
+        val result = validator.validate(envelope, now)
+        assertTrue(result is ValidationResult.Invalid)
+        assertTrue((result as ValidationResult.Invalid).reason.contains("exceeds hopLimit"))
+    }
 }

@@ -1,18 +1,20 @@
 package org.sahayak.mesh.core.security
 
 import org.bouncycastle.crypto.agreement.X25519Agreement
+import org.bouncycastle.crypto.digests.SHA256Digest
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
+import org.bouncycastle.crypto.generators.HKDFBytesGenerator
 import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
 import org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.params.X25519KeyGenerationParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
@@ -32,11 +34,26 @@ data class KeyPairBytes(
     override fun hashCode(): Int = 31 * publicKey.contentHashCode() + privateKey.contentHashCode()
 }
 
+/**
+ * Core cryptographic engine for Sahayak-Mesh X.
+ *
+ * NOTE ON CRYPTOGRAPHIC LIMITATIONS & THREAT MODEL:
+ * - Digital signatures use Ed25519 (RFC 8032) for coordinator authentication and identity verification.
+ * - One-to-one encryption currently uses Ephemeral-Static X25519 + HKDF-SHA256 + AES-256-GCM.
+ * - This provides sender-ephemeral forward secrecy, but NOT bidirectional double-ratcheting or
+ *   post-compromise break-in recovery. If the recipient's static private key is ever compromised,
+ *   captured historical messages to that recipient can be decrypted.
+ * - Production hardening roadmap: Migrate to a formally verified protocol (Noise Protocol Noise_IK/Noise_XX
+ *   or Google Tink HPKE RFC 9180) to eliminate ad-hoc hybrid protocol assembly.
+ */
 object CryptoEngine {
     private val secureRandom = SecureRandom()
     private const val GCM_IV_LENGTH = 12
     private const val GCM_TAG_LENGTH = 128 // bits
     private const val X25519_KEY_LENGTH = 32
+    private const val AES_KEY_LENGTH = 32 // 256 bits
+
+    private val HKDF_INFO = "Sahayak-Mesh-X-v1-E2EE".toByteArray(StandardCharsets.UTF_8)
 
     // ==========================================
     // Ed25519 Digital Signatures
@@ -72,7 +89,7 @@ object CryptoEngine {
     }
 
     // ==========================================
-    // X25519 + AES-256-GCM End-to-End Encryption
+    // X25519 + HKDF-SHA256 + AES-256-GCM E2EE
     // ==========================================
 
     fun generateEncryptionKeyPair(): KeyPairBytes {
@@ -86,16 +103,17 @@ object CryptoEngine {
 
     /**
      * Encrypts plaintext bytes for recipient's X25519 public key.
-     * Generates ephemeral X25519 keypair, calculates shared secret,
-     * hashes with SHA-256 for symmetric AES key, encrypts with AES-GCM.
-     *
-     * Wire Bundle layout:
-     * [32 bytes Ephemeral PubKey] + [12 bytes IV] + [Ciphertext + AuthTag]
+     * Uses Ephemeral-Static X25519, HKDF-SHA256 key derivation, and AES-256-GCM AEAD.
+     * Optionally binds [associatedData] (e.g. sender + recipient identities).
      */
-    fun encrypt(recipientPublicKeyBytes: ByteArray, plaintext: ByteArray): String {
+    fun encrypt(
+        recipientPublicKeyBytes: ByteArray,
+        plaintext: ByteArray,
+        associatedData: ByteArray? = null
+    ): String {
         val ephemeralKeyPair = generateEncryptionKeyPair()
         val sharedSecret = calculateSharedSecret(ephemeralKeyPair.privateKey, recipientPublicKeyBytes)
-        val aesKeyBytes = sha256(sharedSecret)
+        val aesKeyBytes = deriveKeyHkdf(sharedSecret, salt = ephemeralKeyPair.publicKey, info = HKDF_INFO)
 
         val iv = ByteArray(GCM_IV_LENGTH)
         secureRandom.nextBytes(iv)
@@ -104,6 +122,9 @@ object CryptoEngine {
         val keySpec = SecretKeySpec(aesKeyBytes, "AES")
         val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
+
+        associatedData?.let { cipher.updateAAD(it) }
+
         val ciphertext = cipher.doFinal(plaintext)
 
         val bundle = ByteBuffer.allocate(X25519_KEY_LENGTH + GCM_IV_LENGTH + ciphertext.size)
@@ -117,8 +138,13 @@ object CryptoEngine {
 
     /**
      * Decrypts ciphertext bundle using recipient's private X25519 key.
+     * Verifies GCM auth tag and any bound [associatedData].
      */
-    fun decrypt(recipientPrivateKeyBytes: ByteArray, base64Bundle: String): ByteArray {
+    fun decrypt(
+        recipientPrivateKeyBytes: ByteArray,
+        base64Bundle: String,
+        associatedData: ByteArray? = null
+    ): ByteArray {
         val bundle = Base64.getDecoder().decode(base64Bundle)
         require(bundle.size >= X25519_KEY_LENGTH + GCM_IV_LENGTH + 16) { "Malformed encrypted bundle: too short" }
 
@@ -133,12 +159,15 @@ object CryptoEngine {
         buffer.get(ciphertext)
 
         val sharedSecret = calculateSharedSecret(recipientPrivateKeyBytes, ephemeralPublicKey)
-        val aesKeyBytes = sha256(sharedSecret)
+        val aesKeyBytes = deriveKeyHkdf(sharedSecret, salt = ephemeralPublicKey, info = HKDF_INFO)
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val keySpec = SecretKeySpec(aesKeyBytes, "AES")
         val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
         cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+
+        associatedData?.let { cipher.updateAAD(it) }
+
         return cipher.doFinal(ciphertext)
     }
 
@@ -149,11 +178,22 @@ object CryptoEngine {
         agreement.init(priv)
         val secret = ByteArray(agreement.agreementSize)
         agreement.calculateAgreement(pub, secret, 0)
+
+        // Verify shared secret is not all zeros (RFC 7748 check)
+        require(!secret.all { it == 0.toByte() }) { "Invalid X25519 key agreement: shared secret is all zeros" }
+
         return secret
     }
 
-    private fun sha256(data: ByteArray): ByteArray {
-        return MessageDigest.getInstance("SHA-256").digest(data)
+    /**
+     * RFC 5869 HKDF-SHA256 Key Derivation Function.
+     */
+    private fun deriveKeyHkdf(sharedSecret: ByteArray, salt: ByteArray, info: ByteArray): ByteArray {
+        val hkdf = HKDFBytesGenerator(SHA256Digest())
+        hkdf.init(HKDFParameters(sharedSecret, salt, info))
+        val output = ByteArray(AES_KEY_LENGTH)
+        hkdf.generateBytes(output, 0, AES_KEY_LENGTH)
+        return output
     }
 
     fun toHex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }

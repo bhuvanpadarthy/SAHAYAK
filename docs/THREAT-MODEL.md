@@ -10,34 +10,50 @@
 
 ---
 
-## 2. Threat Vectors and Mitigations
+## 2. Cryptographic Architecture & Review Findings (Focused Codebase Audit)
 
-| Threat | Description | Mitigation in Sahayak-Mesh X |
-| :--- | :--- | :--- |
-| **Impersonated Coordinator** | Malicious actor broadcasts fake evacuation or panic notices. | Every broadcast requires a cryptographic signature (Ed25519) verified against pre-enrolled coordinator public keys stored in local Room DB. Unsigned/unverified broadcasts are rejected by the domain layer. |
-| **Unauthorized Mission Membership** | An unauthorized device attempts to decrypt mission channels or join incident dispatch. | Mission tickets are cryptographically signed during in-person QR enrollment or cryptographic handshake. RBAC permissions enforced at repository boundary. |
-| **Packet Forgery & Tampering** | An intermediate relay modifies coordinates, text, or alert urgency in transit. | Signatures cover canonicalized envelope headers and payloads. AEAD (ChaCha20-Poly1305 / AES-GCM) provides tamper detection for private messages; invalid auth tags result in instant drop. |
-| **Replay Attacks** | An attacker captures a valid evacuation or SOS packet and re-transmits it hours later. | Nonces, creation timestamps with expiry window, and an LRU packet deduplication table of seen UUIDs prevent reprocessing. |
-| **Compromised Relays & Plaintext Leakage** | Intermediate mesh hops inspect private citizen messages. | End-to-end encryption (E2EE) with X25519 Diffie-Hellman and per-session keys. Relays only inspect outer routing envelope. |
-| **Denial of Service / Buffer Exhaustion** | An attacker floods the mesh with gigantic payloads or infinite message loops. | Strict packet size bounds (max 64KB for control/chat), hop limits (max 5 hops), strict queue caps (max 500 queued packets), and priority-based LRU cache eviction (Emergency SOS given top retention priority). |
-| **Sybil & Identity Spam** | A rogue device generates hundreds of fake identities to spam channels. | Local contact blocking, trust state tagging (`VERIFIED_IN_PERSON` vs `UNKNOWN`), and rate-limiting per peer session. |
-| **Revoked Coordinator / Compromised Keys** | A coordinator's phone is stolen. | Revocation packets signed by the Master Authority or a quorum of coordinators propagate through the mesh with high priority. Revoked keys immediately invalidate future and pending messages. |
+### A. Current Implementation Status & Evaluation
+- **Digital Signatures**: Ed25519 (RFC 8032) via Bouncy Castle. Verified for coordinator broadcasts and identity signatures.
+- **Key Agreement**: X25519 (RFC 7748) Ephemeral-Static Diffie-Hellman with zero-shared-secret validation.
+- **Key Derivation**: HKDF-SHA256 (RFC 5869) with domain separation tag (`Sahayak-Mesh-X-v1-E2EE`) and ephemeral public key as salt.
+- **Symmetric Cipher**: AES-256-GCM AEAD with 12-byte random IV and 128-bit authentication tag.
+- **Associated Authenticated Data (AAD)**: Binds sender and recipient public keys into AES-GCM to prevent Unknown Key Share (UKS) and sender spoofing.
+
+### B. Unresolved Cryptographic Risks & Limitations (CRITICAL)
+1. **Ad-Hoc / Custom Hybrid Assembly (AGENTS.md Rule 5)**:
+   - Current one-to-one encryption is an ad-hoc Ephemeral-Static hybrid scheme (ECIES-like), assembled manually from cryptographic primitives.
+   - While Bouncy Castle implements the primitives, assembling custom envelopes and handshakes violates the principle of using vetted, end-to-end security protocols.
+2. **Asymmetric Forward Secrecy Limitation (No Double Ratchet)**:
+   - The scheme provides forward secrecy *only* against future compromise of the sender's static key.
+   - If the *recipient's static private key* is compromised, an adversary who intercepted and stored historical mesh traffic can compute $X25519(sk_{recipient}, ephem\_pk)$ for all past messages and decrypt them.
+   - There is NO bidirectional Diffie-Hellman ratcheting and NO Post-Compromise Security (Break-in recovery).
+3. **Replay Window Vulnerability across Device Restarts**:
+   - `DeduplicationFilter` operates as an in-memory LRU cache.
+   - If an Android device process is killed or the phone is rebooted, the deduplication cache is reset, allowing past valid packets to be replayed by an attacker until the cache is repopulated.
+4. **Transport Implementation Status**:
+   - Google Nearby Connections radio implementation is currently **0% implemented** (only the `MeshTransport` interface and JVM `SimulatedMeshTransport` exist in code).
+
+### C. Recommended Standard Protocol Migration (Phase 2 Roadmap)
+To satisfy the "No Custom Cryptography" golden rule and achieve true double-ratcheted forward secrecy and post-compromise security, the project must migrate to one of the following reviewed protocols:
+1. **Google Tink HPKE (Hybrid Public Key Encryption - RFC 9180)**:
+   - Standardized, reviewed, and audited implementation available via `com.google.crypto.tink:tink-android`.
+   - Native support for Auth-Encap (authenticated sender mode) with explicit Associated Data (`aad`) binding.
+2. **Noise Protocol Framework (e.g. `Noise_IK` or `Noise_XX` via `flynn/noise-java`)**:
+   - Formally verified peer-to-peer / mesh secure messaging framework providing mutual authentication, zero-round-trip encryption, and channel binding.
+3. **Signal Protocol (Double Ratchet + X3DH)**:
+   - Industry standard for asynchronous offline messaging with full forward secrecy and break-in recovery.
 
 ---
 
-## 3. Cryptographic Primitives
+## 3. Threat Vectors and Current Mitigation Status
 
-- **Digital Signatures**: Ed25519 (RFC 8032) for device identity, mission invitations, and broadcast authorizations.
-- **Key Exchange**: X25519 (RFC 7748) for Diffie-Hellman ephemeral/static key agreement.
-- **Authenticated Encryption**: ChaCha20-Poly1305 (RFC 8439) / AES-256-GCM.
-- **Key Storage**: Keys generated and stored using Android Keystore (`AndroidKeyStore`) with StrongBox or TEE where supported by the device.
-- **Randomness**: `java.security.SecureRandom`.
-
----
-
-## 4. Privacy & Data Minimization
-
-- **No Plaintext Identifiers**: Peer greetings do not transmit personal names or phone numbers in cleartext over unencrypted beacons.
-- **Metadata Protection**: Envelope routing identifiers use truncated key hashes or ephemeral session tokens where feasible.
-- **Local Data Retention**: Room database stores messages with configurable retention policies (e.g., auto-purge after 7 days post-mission).
-- **Log Sanitization**: ProGuard / R8 rules and custom Timber/Logger tree ensure zero plaintext, tokens, or private keys are written to Logcat.
+| Threat | Description | Current Mitigation in Codebase | Remaining Residual Risk |
+| :--- | :--- | :--- | :--- |
+| **Impersonated Coordinator** | Malicious actor broadcasts fake evacuation or panic notices. | `MissionAuthorizer` enforces Ed25519 digital signature validation against coordinator public key. Also verifies active status, expiration time, and `BROADCAST_ALERT` payload type. | Coordinator private key theft on device without StrongBox Keystore. |
+| **Oversized / DoS Packets** | Flooding mesh with gigantic payloads to exhaust memory. | `ProtocolValidator` enforces strict 64 KB maximum packet size bounds and hop limit checks. | Radio-level jamming cannot be mitigated at application layer. |
+| **Inverted Lifetime Packets** | Packets with corrupt or malicious timestamps crafted to bypass expiration. | `ProtocolValidator` rejects packets where `expiresAtMs <= createdAtMs`. | None at validation layer. |
+| **Delivered Message Expiry Glitch** | Previously delivered or read messages falsely transitioning to expired. | `MessageStateMachine` restricts expiry strictly to `LOCAL_QUEUED` and `TRANSMITTED` states. | None at domain state machine layer. |
+| **Relay Eavesdropping** | Intermediate mesh hops inspect citizen private messages. | X25519 + HKDF-SHA256 + AES-256-GCM AEAD encryption. Verified in `SimulatedMeshRoutingTest`. | Recipient long-term key compromise decrypts historical traffic (lacks double ratchet). |
+| **Unknown Key Share / Impostor AAD** | Attacker substitutes sender ID on encrypted ciphertext. | AES-GCM Associated Data (`aad`) binds sender and recipient public keys into AEAD tag. | Verified in `CryptoEngineTest`. |
+| **Process Termination Data Loss** | Unsent messages lost when Android OS kills background process. | Room SQLite database persists outbox messages. Verified in `RoomPersistenceTest`. | Database file unencrypted if device storage is unlocked without Android Keystore SQLCipher. |
+| **Replay Attacks across Process Death** | Attacker replays captured valid packets after device reboots. | `DeduplicationFilter` has 48h TTL in-memory. | **HIGH**: In-memory cache is cleared on process death. Must be backed by Room SQLite table. |

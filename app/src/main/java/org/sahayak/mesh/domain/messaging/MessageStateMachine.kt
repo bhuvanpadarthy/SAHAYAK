@@ -29,7 +29,8 @@ class MessageStateMachine {
      * Checks if a message has exceeded its expiry time.
      */
     fun checkExpiry(message: Message, currentTimeMs: Long = System.currentTimeMillis()): Message {
-        if (!message.state.isTerminal && message.expiresAtMs <= currentTimeMs) {
+        val isAwaitingDelivery = message.state == MessageState.LOCAL_QUEUED || message.state == MessageState.TRANSMITTED
+        if (isAwaitingDelivery && message.expiresAtMs <= currentTimeMs) {
             return message.copy(state = MessageState.EXPIRED)
         }
         return message

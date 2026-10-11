@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.sahayak.mesh.transport.SimulatedMeshRoutingTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-11T13:46:43" hostname="BHUVANPADARTHY" time="0.07">
-  <properties/>
-  <testcase name="testStoreAndForwardE2EERoutingThroughUntrustedRelay" classname="org.sahayak.mesh.transport.SimulatedMeshRoutingTest" time="0.07"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

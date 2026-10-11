@@ -66,8 +66,8 @@ enum class MessageState {
         return when (this) {
             LOCAL_QUEUED -> newState in setOf(TRANSMITTED, RECEIVED_BY_DEVICE, FAILED, EXPIRED, CANCELLED)
             TRANSMITTED -> newState in setOf(RECEIVED_BY_DEVICE, READ_BY_RECIPIENT, HUMAN_ACKNOWLEDGED, FAILED, EXPIRED, CANCELLED)
-            RECEIVED_BY_DEVICE -> newState in setOf(READ_BY_RECIPIENT, HUMAN_ACKNOWLEDGED, EXPIRED)
-            READ_BY_RECIPIENT -> newState in setOf(HUMAN_ACKNOWLEDGED, EXPIRED)
+            RECEIVED_BY_DEVICE -> newState in setOf(READ_BY_RECIPIENT, HUMAN_ACKNOWLEDGED)
+            READ_BY_RECIPIENT -> newState in setOf(HUMAN_ACKNOWLEDGED)
             HUMAN_ACKNOWLEDGED -> false
             FAILED, EXPIRED, CANCELLED -> false
         }

@@ -8,29 +8,35 @@ In accordance with our strict verification principles, every feature is explicit
 
 ---
 
-## Current Status Matrix (Phase 1 Completed)
+## Current Status Matrix (Post-Review Baseline)
 
 | Capability / Feature | Status | Verification Evidence / Details |
 | :--- | :--- | :--- |
 | **Project Build Baseline** | **VERIFIED** | Gradle 8.10.2 + AGP 8.5.2 + OpenJDK 17 + Android 34 SDK. `assembleDebug` passed, generated `app-debug.apk` (22MB). |
-| **Continuous Integration (CI)** | **VERIFIED** | `.github/workflows/ci.yml` configured with JDK 17, `./gradlew testDebugUnitTest`, and `./gradlew assembleDebug`. |
-| **Message State Model** | **VERIFIED** | Explicit 8-state model (`LOCAL_QUEUED` -> `HUMAN_ACKNOWLEDGED`). Verified in `MessageStateTest` (5 tests passing). |
-| **Room Local Persistence** | **VERIFIED** | Room v1 schema with `messages`, `recipient_statuses`, `contacts`, `missions`, `incidents` compiled with KSP (`SahayakDatabase`). |
-| **Wire Protocol & Envelope** | **VERIFIED** | `PacketEnvelope` v1 with canonical SHA-256 header hashing, expiry checks, and bounded 64KB buffers. Verified in `ProtocolValidatorTest` (5 tests passing). |
-| **Security & Cryptography** | **VERIFIED** | Ed25519 signing + verification, X25519 ECDH + AES-256-GCM AEAD encryption and tamper-resistance. Verified in `CryptoEngineTest` (4 tests passing). |
-| **Deduplication Engine** | **VERIFIED** | Bounded LRU cache with 48h TTL preventing packet loops and replay storms. Verified in `DeduplicationFilterTest` (3 tests passing). |
-| **Mission Broadcasts & RBAC** | **VERIFIED** | Cryptographic authorization of coordinator broadcasts and role checks. Verified in `MissionAuthorizerTest` (4 tests passing). |
-| **Multi-hop Store-and-Forward (Simulation)** | **SIMULATED** | 3-node routing test (A -> Relay B -> C) where Relay B forwards ciphertext without being able to decrypt payload. Verified in `SimulatedMeshRoutingTest` (1 test passing). |
-| **Two-Device Private E2EE Chat** | PLANNED (Phase 2) | Direct peer messaging, receipt tracking, offline queue recovery over Nearby Connections. |
-| **Physical Nearby RF Hardware** | UNVERIFIED | Requires physical Android devices. Documented in `docs/DEVICE-TEST-REPORT.md`. |
-| **Scalability (1,000 Nodes)** | PLANNED (Phase 6) | High-volume simulation harness. Zero unverified physical claims. |
+| **Room Local Persistence Across Restarts** | **VERIFIED** | Verified with Robolectric in `RoomPersistenceTest`: `LOCAL_QUEUED` message survives full database close and re-open. |
+| **Message State Model & Invariants** | **VERIFIED** | 8-state model. Verified in `MessageStateTest` (7 tests passing), including prevention of delivered/read messages expiring. |
+| **Wire Protocol & Validation** | **VERIFIED** | `PacketEnvelope` v1 with canonical hashing, size bounds (64KB), hop limits, and inverted lifetime checks. Verified in `ProtocolValidatorTest` (7 tests passing). |
+| **Mission Broadcasts & RBAC** | **VERIFIED** | Ed25519 coordinator signatures, role enforcement, payload type validation, and mission expiry checks. Verified in `MissionAuthorizerTest` (6 tests passing). |
+| **Deduplication Engine** | **VERIFIED (In-Memory)** | Thread-safe LRU cache with 48h TTL. Verified in `DeduplicationFilterTest` (3 tests passing). Note: In-memory only; cleared on app restart (unresolved risk). |
+| **Cryptographic Engine (Interim)** | **VERIFIED (Interim)** | Ed25519 signing + X25519 + HKDF-SHA256 + AES-256-GCM AEAD with AAD binding. Verified in `CryptoEngineTest` (6 tests passing). **AUDIT FINDING**: Ad-hoc custom hybrid assembly; requires migration to standard Google Tink HPKE / Noise Protocol. |
+| **Multi-hop Store-and-Forward (Simulation)** | **SIMULATED** | 3-node in-memory routing (A -> Relay B -> C) where Relay B cannot decrypt payload. Verified in `SimulatedMeshRoutingTest` (1 test passing). |
+| **Google Nearby Connections Radio Transport** | **PLANNED (0% Implemented)** | Currently only an abstract interface (`MeshTransport`) and in-memory mock (`SimulatedMeshTransport`). No concrete `NearbyConnectionsClient` code written yet. |
+| **Physical Nearby RF Hardware** | **UNVERIFIED** | Awaiting attached physical Android test devices. Documented in `docs/DEVICE-TEST-REPORT.md`. |
+| **Scale & 1,000 Peer Mesh** | **PLANNED** | High-volume simulation harness. Zero unverified physical claims. |
 
 ---
 
 ## Test Verification Summary
-- **Total Unit & Protocol Tests Executed**: 22
-- **Passed**: 22
+- **Total Unit, Persistence & Regression Tests Executed**: 31
+- **Passed**: 31
 - **Failed**: 0
 - **Skipped**: 0
-- **Duration**: ~260ms execution time across 6 test suites
+- **Test Execution Suites**:
+  1. `MessageStateTest` (7/7 passed)
+  2. `ProtocolValidatorTest` (7/7 passed)
+  3. `CryptoEngineTest` (6/6 passed)
+  4. `RoomPersistenceTest` (1/1 passed)
+  5. `DeduplicationFilterTest` (3/3 passed)
+  6. `MissionAuthorizerTest` (6/6 passed)
+  7. `SimulatedMeshRoutingTest` (1/1 passed)
 - **Build Output**: `app/build/outputs/apk/debug/app-debug.apk` (22,001,143 bytes)

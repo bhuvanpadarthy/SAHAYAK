@@ -90,4 +90,35 @@ class MessageStateTest {
         val result = stateMachine.transition(message, MessageState.TRANSMITTED)
         assertTrue(result.state == MessageState.TRANSMITTED)
     }
+
+    @Test(expected = IllegalStateException::class)
+    fun testDeliveredMessageCannotTransitionToExpired() {
+        val readMessage = Message(
+            id = "msg-5",
+            conversationId = "conv-1",
+            senderId = "sender-1",
+            recipientId = "recip-1",
+            content = "Already read",
+            state = MessageState.READ_BY_RECIPIENT
+        )
+
+        stateMachine.transition(readMessage, MessageState.EXPIRED)
+    }
+
+    @Test
+    fun testCheckExpiryDoesNotExpireDeliveredOrReadMessages() {
+        val readMessage = Message(
+            id = "msg-6",
+            conversationId = "conv-1",
+            senderId = "sender-1",
+            recipientId = "recip-1",
+            content = "Already read",
+            state = MessageState.READ_BY_RECIPIENT,
+            expiresAtMs = 1000L
+        )
+
+        // Time has passed expiry, but message was already read
+        val result = stateMachine.checkExpiry(readMessage, currentTimeMs = 2000L)
+        assertTrue(result.state == MessageState.READ_BY_RECIPIENT) // Remains READ!
+    }
 }
