@@ -4,6 +4,7 @@ import android.app.Application
 import org.sahayak.mesh.core.security.CryptoEngine
 import org.sahayak.mesh.core.security.KeyPairBytes
 import org.sahayak.mesh.data.database.SahayakDatabase
+import org.sahayak.mesh.transport.api.NearbyConnectionsMeshTransport
 import java.io.File
 
 class SahayakApp : Application() {
@@ -19,11 +20,19 @@ class SahayakApp : Application() {
 
     lateinit var deviceId: String
         private set
+    lateinit var meshTransport: NearbyConnectionsMeshTransport
+    private set
 
     override fun onCreate() {
         super.onCreate()
         database = SahayakDatabase.getInstance(this)
-        initIdentityKeys()
+    initIdentityKeys()
+
+    meshTransport = NearbyConnectionsMeshTransport(
+    context = this,
+    serviceId = "$packageName.mesh",
+    localNodeId = deviceId
+    )
     }
 
     private fun initIdentityKeys() {

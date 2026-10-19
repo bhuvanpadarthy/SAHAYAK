@@ -93,8 +93,12 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+
     // JSON / Serialization
     implementation("com.google.code.gson:gson:2.11.0")
+
+    // Google Play Services Tasks with Kotlin Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
